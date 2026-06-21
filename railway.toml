@@ -1,6 +1,6 @@
 [build]
 builder = "NIXPACKS"
-buildCommand = "npm ci && npm run build --workspace @website-markup-tool/proxy"
+buildCommand = "npm run build --workspace @website-markup-tool/proxy"
 watchPatterns = ["apps/proxy/**", "package.json", "package-lock.json"]
 
 [deploy]
