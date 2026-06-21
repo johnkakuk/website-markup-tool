@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/proxy/:path*",
-      "destination": "https://YOUR-RAILWAY-PROXY.up.railway.app/proxy/:path*"
+      "destination": "https://website-markup-toolproxy-production.up.railway.app/proxy/:path*"
     }
   ]
 }
