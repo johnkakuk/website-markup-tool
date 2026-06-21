@@ -285,6 +285,7 @@ function AuthScreen() {
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
@@ -295,17 +296,32 @@ function AuthScreen() {
 
     setBusy(true);
     setError(null);
+    setMessage(null);
 
     const result =
       mode === "sign-in"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+        : await supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: `${window.location.origin}/` }
+          });
 
     if (result.error) {
       setError(result.error.message);
+    } else if (mode === "sign-up" && !result.data.session) {
+      setMode("sign-in");
+      setPassword("");
+      setMessage(`Account created. Check ${email} for a confirmation link, then sign in.`);
     }
 
     setBusy(false);
+  }
+
+  function toggleMode() {
+    setMode(mode === "sign-in" ? "sign-up" : "sign-in");
+    setError(null);
+    setMessage(null);
   }
 
   return (
@@ -330,6 +346,11 @@ function AuthScreen() {
           />
         </label>
         {error ? <p className="form-error">{error}</p> : null}
+        {message ? (
+          <p className="form-success" role="status">
+            {message}
+          </p>
+        ) : null}
         <button className="primary-button" type="submit" disabled={busy}>
           <Send size={16} />
           {busy ? "Working..." : mode === "sign-in" ? "Sign in" : "Create account"}
@@ -337,7 +358,7 @@ function AuthScreen() {
         <button
           className="text-button"
           type="button"
-          onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+          onClick={toggleMode}
         >
           {mode === "sign-in" ? "Need an account?" : "Already have an account?"}
         </button>

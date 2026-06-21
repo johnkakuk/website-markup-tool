@@ -1,6 +1,6 @@
 export function buildProxyUrl(siteUrl: string) {
   const parsed = new URL(siteUrl);
-  const origin = encodeURIComponent(parsed.origin);
+  const origin = btoa(parsed.origin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const path = parsed.pathname || "/";
   return `/proxy/u/${origin}${path}${parsed.search}`;
 }

@@ -135,7 +135,10 @@ function rewriteRedirect(
 
   const targetOrigin = decodeTargetOrigin(getOriginParam(request));
   const nextUrl = new URL(redirectLocation, `${targetOrigin}${getTargetPath(request)}`);
-  response.setHeader("location", `/proxy/u/${encodeURIComponent(nextUrl.origin)}${nextUrl.pathname}${nextUrl.search}`);
+  response.setHeader(
+    "location",
+    `/proxy/u/${encodeTargetOrigin(nextUrl.origin)}${nextUrl.pathname}${nextUrl.search}`
+  );
 }
 
 function injectBaseTag(html: string, proxiedBase: string) {
@@ -179,7 +182,7 @@ function isRewritableContentType(contentType: string) {
 }
 
 function getProxyRoot(targetOrigin: string) {
-  return `/proxy/u/${encodeURIComponent(targetOrigin)}`;
+  return `/proxy/u/${encodeTargetOrigin(targetOrigin)}`;
 }
 
 function getProxiedBaseUrl(targetOrigin: string, requestPath: string) {
@@ -196,7 +199,10 @@ function decodeTargetOrigin(value: string | undefined) {
     throw new Error("Missing proxy origin.");
   }
 
-  const decoded = decodeURIComponent(value);
+  const legacyDecoded = decodeURIComponent(value);
+  const decoded = legacyDecoded.startsWith("http")
+    ? legacyDecoded
+    : Buffer.from(value, "base64url").toString("utf8");
   const parsed = new URL(decoded);
 
   if (!["http:", "https:"].includes(parsed.protocol)) {
@@ -204,6 +210,10 @@ function decodeTargetOrigin(value: string | undefined) {
   }
 
   return parsed.origin;
+}
+
+function encodeTargetOrigin(targetOrigin: string) {
+  return Buffer.from(targetOrigin, "utf8").toString("base64url");
 }
 
 function getOriginParam(request: IncomingMessage) {

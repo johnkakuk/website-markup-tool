@@ -82,6 +82,9 @@ In Supabase Authentication URL settings:
 - Add the production Vercel URL to allowed redirect URLs.
 - Add preview domains only when they need working authentication.
 
+The frontend also passes its current origin as the signup email redirect. Supabase must list that origin
+as an allowed redirect URL or it will fall back to the configured Site URL.
+
 ## 6. Create the Production Admin
 
 Local users are not copied to hosted Supabase. Sign up once through the deployed app, then run this

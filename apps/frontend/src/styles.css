@@ -171,6 +171,15 @@ textarea:focus {
   padding: 10px 12px;
 }
 
+.form-success {
+  background: #edf8f1;
+  border: 1px solid #b8ddc5;
+  border-radius: 6px;
+  color: #205c38;
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
 .app-shell {
   margin: 0 auto;
   max-width: 1180px;
