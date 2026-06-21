@@ -1,0 +1,19 @@
+{
+  "name": "website-markup-tool",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/frontend",
+    "apps/proxy"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @website-markup-tool/proxy & npm run dev --workspace @website-markup-tool/frontend",
+    "dev:frontend": "npm run dev --workspace @website-markup-tool/frontend",
+    "dev:proxy": "npm run dev --workspace @website-markup-tool/proxy",
+    "build": "npm run build --workspace @website-markup-tool/frontend && npm run build --workspace @website-markup-tool/proxy",
+    "typecheck": "npm run typecheck --workspace @website-markup-tool/frontend && npm run typecheck --workspace @website-markup-tool/proxy"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}

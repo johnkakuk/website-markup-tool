@@ -1,0 +1,65 @@
+Website Markup Tool — Build Brief
+Project Summary
+A web app that lets you add any client website as a "canvas" by entering its URL. The site is loaded through your proxy (which strips frame-busting headers), with an annotation overlay on top. Clients log in to view their canvas, click elements to leave pinned comments, and discuss feedback with you.
+Stack
+
+Frontend:  React + Vite → deployed to Vercel
+Proxy Server:  Node + Express → deployed to Railway
+ Database + Auth:  Supabase (Postgres + Supabase Auth)
+
+How It Works
+You enter a client's URL in the dashboard → a canvas is created with a unique shareable link
+The proxy server fetches the target site, strips X-Frame-Options and Content-Security-Policy headers, and serves it
+The frontend loads the proxied site in an <iframe>
+A transparent overlay <div> sits on top of the iframe, intercepting clicks
+Click → comment form appears at that x/y position → saved to DB
+On canvas load, existing comments are re-rendered as pins over the iframe at their stored coordinates
+
+Auth
+Supabase Auth handles all login/signup/session/password reset
+Two roles: admin (you) and client (invited per project by email)
+Clients only see their assigned canvas
+Enforce access at the DB layer via Supabase Row Level Security (RLS)
+
+Data Model
+users          — managed by Supabase Auth
+canvases       — id, name, site_url, owner_id, created_at
+comments       — id, canvas_id, author_id, element_selector, x_pct, y_pct, viewport_width, page_path, body, screenshot_url, status (open/resolved), created_at
+replies        — id, comment_id, author_id, body, created_at
+canvas_users   — canvas_id, user_id (links clients to their canvas)
+Proxy Server
+
+Node + Express with http-proxy-middleware
+Strips X-Frame-Options and Content-Security-Policy headers from all proxied responses
+Each request includes the canvas token so the server knows which site to proxy
+Deployed to Railway as a standalone service
+
+Comment Pinning — Element Resolution Strategy
+Comments are pinned to DOM elements, not raw coordinates. At comment time, capture and store all of the following:
+
+1. id attribute — most stable, try first on reload
+2. Semantic data attributes — data-testid or similar
+3. XPath by DOM position — e.g. /html/body/div[2]/main/section[1]/h2 — ignores class names, survives React/Vue/Tailwind runtime-generated selectors
+4. x/y percentage + viewport width — last resort fallback
+
+On canvas load, attempt resolution in that order. If 1–3 all fail (element gone due to redesign), fall back to x/y coordinates and automatically resize the iframe to the stored viewport_width so coordinates land as close as possible to the original position. Flag the comment visually as potentially displaced.
+
+Since the proxied site is same-origin, iframe.contentDocument is accessible — use document.elementFromPoint() inside the iframe to identify the clicked element and generate all four selector strategies at click time.
+
+
+Core Features (build in this order)
+Supabase setup — DB schema, RLS policies, Auth config
+Admin dashboard — create canvases by URL, invite client by email, view all comments across projects
+Proxy server — Express app that proxies the target site and strips frame-busting headers
+Iframe + overlay — loads proxied site, transparent div captures clicks, renders comment pins
+Comment pinning — click → selector generation → form → saved to DB with full selector hierarchy
+Comment reload — resolve selectors on load, fall back to viewport-matched coordinates if needed
+Client dashboard — login, view their canvas, leave comments, reply, see open/resolved status
+
+Key Notes
+Store comment position as percentage-based x/y so pins have a coordinate fallback
+Store viewport_width in pixels on every comment for fallback rendering
+Store page_path on each comment (e.g. /about) so pins only render on the correct page
+Screenshots captured with html2canvas on the overlay layer, stored in Supabase Storage
+The proxy and frontend are separate deployed services; CORS must be configured between them
+Since these are all your own client sites, no need to handle aggressive frame-busting edge cases
