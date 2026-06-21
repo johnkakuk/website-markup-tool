@@ -45,3 +45,4 @@ The frontend runs at `http://localhost:5173`. It proxies `/proxy/*` to the Expre
 - Vercel should serve the frontend and rewrite `/proxy/:path*` to the Railway proxy service.
 - The browser must see the proxied site under the frontend origin, otherwise `iframe.contentDocument` is blocked.
 - `comment-screenshots` is created by the migration and comments expect authenticated users to upload there.
+- Follow `DEPLOYMENT.md` for the hosted Supabase, Railway, and Vercel deployment sequence.

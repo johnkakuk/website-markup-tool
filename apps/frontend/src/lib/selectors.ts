@@ -43,8 +43,8 @@ export function resolveElement(documentRef: Document, target: ElementTarget) {
       null
     );
 
-    if (result.singleNodeValue instanceof Element) {
-      return result.singleNodeValue;
+    if (result.singleNodeValue?.nodeType === 1) {
+      return result.singleNodeValue as Element;
     }
   }
 

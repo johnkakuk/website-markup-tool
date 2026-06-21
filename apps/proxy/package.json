@@ -10,11 +10,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.47.10",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "http-proxy-middleware": "^3.0.3",
+    "ipaddr.js": "^1.9.1",
     "morgan": "^1.10.0"
   },
   "devDependencies": {

@@ -1,4 +1,8 @@
 {
+  "framework": "vite",
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build --workspace @website-markup-tool/frontend",
+  "outputDirectory": "apps/frontend/dist",
   "rewrites": [
     {
       "source": "/proxy/:path*",

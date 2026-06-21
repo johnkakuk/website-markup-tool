@@ -2,6 +2,7 @@ export type Canvas = {
   id: string;
   name: string;
   site_url: string;
+  site_origin: string;
   owner_id: string;
   created_at: string;
 };
@@ -21,6 +22,7 @@ export type Comment = {
   viewport_width: number;
   page_path: string;
   body: string;
+  screenshot_path: string | null;
   screenshot_url: string | null;
   status: CommentStatus;
   created_at: string;
@@ -32,6 +34,18 @@ export type Reply = {
   author_id: string;
   body: string;
   created_at: string;
+};
+
+export type Attachment = {
+  id: string;
+  comment_id: string;
+  uploader_id: string;
+  file_name: string;
+  storage_path: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: string;
+  download_url: string | null;
 };
 
 export type PinPosition = {
