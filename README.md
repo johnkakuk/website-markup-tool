@@ -1,6 +1,6 @@
 # Website Markup Tool
 
-A local-first monorepo for a website annotation and client feedback tool.
+A tool for website annotation and client feedback.
 
 ## Apps
 
@@ -46,3 +46,8 @@ The frontend runs at `http://localhost:5173`. It proxies `/proxy/*` to the Expre
 - The browser must see the proxied site under the frontend origin, otherwise `iframe.contentDocument` is blocked.
 - `comment-screenshots` is created by the migration and comments expect authenticated users to upload there.
 - Follow `DEPLOYMENT.md` for the hosted Supabase, Railway, and Vercel deployment sequence.
+
+## Future Features
+
+- Optional name and email fields for attribution on replies.
+- Responsive preview controls for simulating common viewport widths.
