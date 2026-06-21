@@ -29,7 +29,7 @@ import {
 import { buildProxyUrl, pagePathFromProxyUrl } from "./lib/proxyUrl";
 import { captureAndUploadScreenshot } from "./lib/screenshot";
 import { getElementTarget, resolveElement } from "./lib/selectors";
-import { hasSupabaseConfig, supabase } from "./lib/supabase";
+import { hasCanvasShareLink, hasSupabaseConfig, supabase } from "./lib/supabase";
 import type { Attachment, Canvas, Comment, ElementTarget, PinPosition, Reply } from "./types";
 
 type DraftComment = {
@@ -235,6 +235,7 @@ function formatFileSize(size: number) {
 export function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) {
@@ -242,16 +243,60 @@ export function App() {
       return;
     }
 
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setLoadingSession(false);
-    });
+    let active = true;
+
+    async function initializeSession() {
+      if (!supabase) {
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        reportError("Could not restore the Supabase session", error);
+      }
+
+      let nextSession = data.session;
+
+      if (nextSession?.user.is_anonymous && !hasCanvasShareLink) {
+        const { error: signOutError } = await supabase.auth.signOut();
+        if (signOutError) {
+          reportError("Could not clear an anonymous share session", signOutError);
+        }
+        nextSession = null;
+      }
+
+      if (!nextSession && hasCanvasShareLink) {
+        const { data: anonymousData, error: anonymousError } = await supabase.auth.signInAnonymously();
+        if (anonymousError) {
+          reportError("Could not start anonymous canvas access", anonymousError);
+          if (active) {
+            setSessionError(
+              "Public canvas access is unavailable. Enable anonymous sign-ins in Supabase Auth settings."
+            );
+          }
+        } else {
+          nextSession = anonymousData.session;
+        }
+      }
+
+      if (active) {
+        setSession(nextSession);
+        setLoadingSession(false);
+      }
+    }
+
+    void initializeSession();
 
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+      if (active) {
+        setSession(nextSession);
+      }
     });
 
-    return () => data.subscription.unsubscribe();
+    return () => {
+      active = false;
+      data.subscription.unsubscribe();
+    };
   }, []);
 
   if (!hasSupabaseConfig) {
@@ -260,6 +305,17 @@ export function App() {
 
   if (loadingSession) {
     return <main className="center-state">Loading workspace...</main>;
+  }
+
+  if (sessionError) {
+    return (
+      <main className="center-state">
+        <section className="setup-panel">
+          <h1>Canvas access failed</h1>
+          <p>{sessionError}</p>
+        </section>
+      </main>
+    );
   }
 
   if (!session) {
@@ -308,6 +364,9 @@ function AuthScreen() {
           });
 
     if (result.error) {
+      reportError(mode === "sign-in" ? "Sign-in failed" : "Sign-up failed", result.error, {
+        email
+      });
       setError(result.error.message);
     } else if (mode === "sign-up" && !result.data.session) {
       setMode("sign-in");
@@ -372,6 +431,7 @@ function Dashboard({ session }: { session: Session }) {
   const [selectedCanvas, setSelectedCanvas] = useState<Canvas | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingCanvasId, setDeletingCanvasId] = useState<string | null>(null);
   const requestedCanvasId = useMemo(
     () => new URLSearchParams(window.location.search).get("canvas"),
     []
@@ -391,6 +451,7 @@ function Dashboard({ session }: { session: Session }) {
       .order("created_at", { ascending: false });
 
     if (loadError) {
+      reportError("Could not load canvases", loadError, { requestedCanvasId });
       setError(loadError.message);
     } else {
       const nextCanvases = data ?? [];
@@ -406,6 +467,70 @@ function Dashboard({ session }: { session: Session }) {
   useEffect(() => {
     void loadCanvases();
   }, []);
+
+  async function deleteCanvas(canvas: Canvas) {
+    if (!supabase || !window.confirm(`Delete "${canvas.name}" and all of its comments? This cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingCanvasId(canvas.id);
+    setError(null);
+
+    try {
+      const { data: canvasComments, error: commentsError } = await supabase
+        .from("comments")
+        .select("id,screenshot_path")
+        .eq("canvas_id", canvas.id);
+
+      if (commentsError) {
+        throw commentsError;
+      }
+
+      const commentIds = (canvasComments ?? []).map((comment) => comment.id);
+      const { data: canvasAttachments, error: attachmentsError } = commentIds.length
+        ? await supabase
+            .from("comment_attachments")
+            .select("storage_path")
+            .in("comment_id", commentIds)
+        : { data: [], error: null };
+
+      if (attachmentsError) {
+        throw attachmentsError;
+      }
+
+      const screenshotPaths = (canvasComments ?? [])
+        .map((comment) => comment.screenshot_path)
+        .filter((path): path is string => Boolean(path));
+      const attachmentPaths = (canvasAttachments ?? []).map((attachment) => attachment.storage_path);
+      const [screenshotCleanup, attachmentCleanup] = await Promise.all([
+        screenshotPaths.length
+          ? supabase.storage.from("comment-screenshots").remove(screenshotPaths)
+          : Promise.resolve({ error: null }),
+        attachmentPaths.length
+          ? supabase.storage.from("comment-attachments").remove(attachmentPaths)
+          : Promise.resolve({ error: null })
+      ]);
+
+      if (screenshotCleanup.error || attachmentCleanup.error) {
+        throw screenshotCleanup.error ?? attachmentCleanup.error;
+      }
+
+      const { error: deleteError } = await supabase.from("canvases").delete().eq("id", canvas.id);
+      if (deleteError) {
+        reportError("Project storage was removed but its database record could not be deleted", deleteError, {
+          canvasId: canvas.id
+        });
+        throw deleteError;
+      }
+
+      await loadCanvases();
+    } catch (deleteError) {
+      reportError("Could not delete canvas", deleteError, { canvasId: canvas.id });
+      setError(getErrorMessage(deleteError, "Could not delete project."));
+    } finally {
+      setDeletingCanvasId(null);
+    }
+  }
 
   if (selectedCanvas) {
     return <CanvasWorkspace canvas={selectedCanvas} session={session} />;
@@ -452,15 +577,26 @@ function Dashboard({ session }: { session: Session }) {
                   <strong>{canvas.name}</strong>
                   <small>{canvas.site_url}</small>
                 </span>
-                <a
-                  className="open-canvas-link"
-                  href={`${window.location.pathname}?canvas=${encodeURIComponent(canvas.id)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open in new tab
-                  <ExternalLink size={15} />
-                </a>
+                <div className="canvas-actions">
+                  <a
+                    className="open-canvas-link"
+                    href={buildCanvasShareUrl(canvas)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open public link
+                    <ExternalLink size={15} />
+                  </a>
+                  <button
+                    className="delete-canvas-button"
+                    disabled={deletingCanvasId === canvas.id}
+                    onClick={() => void deleteCanvas(canvas)}
+                    type="button"
+                  >
+                    <Trash2 size={15} />
+                    {deletingCanvasId === canvas.id ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
               </div>
             ))}
             {!loading && canvases.length === 0 ? <p className="empty-state">Create a canvas to start.</p> : null}
@@ -474,7 +610,6 @@ function Dashboard({ session }: { session: Session }) {
 function CreateCanvasForm({ ownerId, onCreated }: { ownerId: string; onCreated: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [siteUrl, setSiteUrl] = useState("");
-  const [clientEmail, setClientEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -500,22 +635,11 @@ function CreateCanvasForm({ ownerId, onCreated }: { ownerId: string; onCreated: 
         throw canvasError;
       }
 
-      if (clientEmail.trim()) {
-        const { error: linkError } = await supabase.from("canvas_users").insert({
-          canvas_id: canvas.id,
-          email: clientEmail.trim().toLowerCase()
-        });
-
-        if (linkError) {
-          throw linkError;
-        }
-      }
-
       setName("");
       setSiteUrl("");
-      setClientEmail("");
       await onCreated();
     } catch (submitError) {
+      reportError("Could not create canvas", submitError, { siteUrl });
       setError(getErrorMessage(submitError, "Could not create canvas."));
     } finally {
       setBusy(false);
@@ -542,10 +666,6 @@ function CreateCanvasForm({ ownerId, onCreated }: { ownerId: string; onCreated: 
           required
         />
       </label>
-      <label>
-        Client email
-        <input value={clientEmail} onChange={(event) => setClientEmail(event.target.value)} type="email" />
-      </label>
       {error ? <p className="form-error">{error}</p> : null}
       <button className="primary-button" disabled={busy} type="submit">
         <Plus size={16} />
@@ -570,6 +690,21 @@ function getErrorMessage(error: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+function reportError(context: string, error: unknown, details: Record<string, unknown> = {}) {
+  console.error(`[Website Markup Tool] ${context}`, {
+    ...details,
+    error,
+    message: getErrorMessage(error, context)
+  });
+}
+
+function buildCanvasShareUrl(canvas: Canvas) {
+  const url = new URL("/", window.location.origin);
+  url.searchParams.set("canvas", canvas.id);
+  url.searchParams.set("share", canvas.share_token);
+  return url.toString();
 }
 
 function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session }) {
@@ -609,6 +744,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       .order("created_at", { ascending: false });
 
     if (commentsError) {
+      reportError("Could not load canvas comments", commentsError, { canvasId: canvas.id });
       setError(commentsError.message);
       return;
     }
@@ -619,9 +755,17 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
           return comment;
         }
 
-        const { data: signedScreenshot } = await supabaseClient.storage
+        const { data: signedScreenshot, error: signedScreenshotError } = await supabaseClient.storage
           .from("comment-screenshots")
           .createSignedUrl(comment.screenshot_path, 3600);
+
+        if (signedScreenshotError) {
+          reportError("Could not create a screenshot URL", signedScreenshotError, {
+            canvasId: canvas.id,
+            commentId: comment.id,
+            screenshotPath: comment.screenshot_path
+          });
+        }
 
         return {
           ...comment,
@@ -653,21 +797,33 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
     ]);
 
     if (repliesResult.error) {
+      reportError("Could not load comment replies", repliesResult.error, { canvasId: canvas.id });
       setError(repliesResult.error.message);
     } else {
       setReplies(repliesResult.data ?? []);
     }
 
     if (attachmentsResult.error) {
+      reportError("Could not load comment attachments", attachmentsResult.error, {
+        canvasId: canvas.id
+      });
       setError(attachmentsResult.error.message);
       return;
     }
 
     const attachmentsWithUrls = await Promise.all(
       (attachmentsResult.data ?? []).map(async (attachment) => {
-        const { data: signedUrl } = await supabaseClient.storage
+        const { data: signedUrl, error: signedUrlError } = await supabaseClient.storage
           .from("comment-attachments")
           .createSignedUrl(attachment.storage_path, 3600, { download: attachment.file_name });
+
+        if (signedUrlError) {
+          reportError("Could not create an attachment URL", signedUrlError, {
+            attachmentId: attachment.id,
+            canvasId: canvas.id,
+            storagePath: attachment.storage_path
+          });
+        }
 
         return {
           ...attachment,
@@ -804,6 +960,18 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
 
   function handleFrameLoad() {
     const frameLocation = iframeRef.current?.contentWindow?.location;
+    const frameDocument = iframeRef.current?.contentDocument;
+    const frameText = frameDocument?.body?.innerText.trim().slice(0, 300) ?? "";
+
+    if (/\bNOT_FOUND\b|The page could not be found|^\{?"?error"?\s*:/i.test(frameText)) {
+      reportError("The proxied website loaded an error page", new Error(frameText), {
+        canvasId: canvas.id,
+        iframeSrc,
+        frameUrl: frameLocation?.href
+      });
+      setError("The proxied website returned a 404. Open the browser console for request details.");
+    }
+
     setPagePath(frameLocation ? pagePathFromProxyUrl(frameLocation.pathname) : "/");
     setIframeLoaded(true);
   }
@@ -1014,6 +1182,11 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       setElementHighlight(null);
       await loadDiscussion();
     } catch (saveError) {
+      reportError("Could not save comment", saveError, {
+        canvasId: canvas.id,
+        commentId,
+        pagePath: draft.pagePath
+      });
       if (commentCreated) {
         await supabase.from("comments").delete().eq("id", commentId);
       }
@@ -1044,6 +1217,11 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       .eq("id", comment.id);
 
     if (updateError) {
+      reportError("Could not update comment status", updateError, {
+        canvasId: canvas.id,
+        commentId: comment.id,
+        nextStatus
+      });
       setError(updateError.message);
     } else {
       await loadDiscussion();
@@ -1059,6 +1237,10 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
     const { error: deleteError } = await supabase.from("comments").delete().eq("id", comment.id);
 
     if (deleteError) {
+      reportError("Could not delete comment", deleteError, {
+        canvasId: canvas.id,
+        commentId: comment.id
+      });
       setError(deleteError.message);
       return;
     }
@@ -1090,7 +1272,19 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       {error ? <p className="workspace-error">{error}</p> : null}
 
       <section className="canvas-stage">
-        <iframe ref={iframeRef} title={canvas.name} src={iframeSrc} onLoad={handleFrameLoad} />
+        <iframe
+          ref={iframeRef}
+          title={canvas.name}
+          src={iframeSrc}
+          onError={(event) => {
+            reportError("The canvas iframe failed to load", event, {
+              canvasId: canvas.id,
+              iframeSrc
+            });
+            setError("The website preview failed to load. Open the browser console for details.");
+          }}
+          onLoad={handleFrameLoad}
+        />
         <div
           className={`annotation-layer ${interactionMode}`}
           onClick={handleOverlayClick}
@@ -1211,6 +1405,10 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
               });
 
               if (replyError) {
+                reportError("Could not save reply", replyError, {
+                  canvasId: canvas.id,
+                  commentId: activeComment.id
+                });
                 setError(replyError.message);
               } else {
                 await loadDiscussion();

@@ -55,7 +55,12 @@ app.use("/proxy/u/:origin", async (request, response, next) => {
     await assertRegisteredOrigin(targetOrigin);
     next();
   } catch (error) {
-    console.error("Proxy target rejected:", error);
+    console.error("[proxy] Target rejected", {
+      error,
+      method: request.method,
+      originToken: request.params.origin,
+      path: request.originalUrl
+    });
     response.status(403).json({ error: "This proxy target is not approved." });
   }
 });
@@ -73,7 +78,7 @@ app.use(
     pathRewrite: (path, request) => {
       const originParam = getOriginParam(request);
       const stripped = path.replace(new RegExp(`^/proxy/u/${escapeRegExp(originParam)}`), "");
-      return stripped || "/";
+      return decodeProxyPath(stripped || "/");
     },
     on: {
       proxyReq: (proxyRequest) => {
@@ -82,6 +87,14 @@ app.use(
       proxyRes: responseInterceptor(async (responseBuffer, proxyResponse, request, response) => {
         stripFrameBlockingHeaders(response);
         rewriteRedirect(proxyResponse.headers.location, request, response);
+
+        if ((proxyResponse.statusCode ?? 200) >= 400) {
+          console.error("[proxy] Upstream returned an error", {
+            statusCode: proxyResponse.statusCode,
+            targetOrigin: decodeTargetOrigin(getOriginParam(request)),
+            targetPath: getTargetPath(request)
+          });
+        }
 
         const contentType = String(proxyResponse.headers["content-type"] || "");
         if (!isRewritableContentType(contentType)) {
@@ -137,7 +150,7 @@ function rewriteRedirect(
   const nextUrl = new URL(redirectLocation, `${targetOrigin}${getTargetPath(request)}`);
   response.setHeader(
     "location",
-    `/proxy/u/${encodeTargetOrigin(nextUrl.origin)}${nextUrl.pathname}${nextUrl.search}`
+    `/proxy/u/${encodeTargetOrigin(nextUrl.origin)}${encodeProxyPath(nextUrl.pathname)}${nextUrl.search}`
   );
 }
 
@@ -155,13 +168,29 @@ function injectBaseTag(html: string, proxiedBase: string) {
 }
 
 function rewriteProxiedUrls(content: string, targetOrigin: string, proxyRoot: string) {
-  const sameOriginUrl = new RegExp(`${escapeRegExp(targetOrigin)}/`, "g");
+  const sameOriginUrl = new RegExp(
+    escapeRegExp(targetOrigin) + "/([^\\s\"'`<)]*)",
+    "g"
+  );
+  const bareOriginUrl = new RegExp(
+    escapeRegExp(targetOrigin) + "(?=[\\s\"'`<)])",
+    "g"
+  );
 
   return content
-    .replace(sameOriginUrl, `${proxyRoot}/`)
-    .replace(/(["'`])\/(?!\/|proxy\/u\/)/g, `$1${proxyRoot}/`)
-    .replace(/(url\(\s*["']?)\/(?!\/|proxy\/u\/)/gi, `$1${proxyRoot}/`)
-    .replace(/(\b(?:src|href|action|poster)=)\/(?!\/|proxy\/u\/)/gi, `$1${proxyRoot}/`);
+    .replace(sameOriginUrl, (_match, path: string) => `${proxyRoot}/${path || "~"}`)
+    .replace(bareOriginUrl, `${proxyRoot}/~`)
+    .replace(/(["'`])\/(?!\/|proxy\/u\/)([^"'`]*)/g, (_match, quote: string, path: string) => {
+      return `${quote}${proxyRoot}/${path || "~"}`;
+    })
+    .replace(
+      /(url\(\s*["']?)\/(?!\/|proxy\/u\/)([^"')\s]*)/gi,
+      (_match, prefix: string, path: string) => `${prefix}${proxyRoot}/${path || "~"}`
+    )
+    .replace(
+      /(\b(?:src|href|action|poster)=)\/(?!\/|proxy\/u\/)([^\s"'`>]*)/gi,
+      (_match, prefix: string, path: string) => `${prefix}${proxyRoot}/${path || "~"}`
+    );
 }
 
 function stripMetaContentSecurityPolicy(html: string) {
@@ -191,7 +220,19 @@ function getProxiedBaseUrl(targetOrigin: string, requestPath: string) {
     ? parsed.pathname
     : parsed.pathname.slice(0, parsed.pathname.lastIndexOf("/") + 1);
 
-  return `${getProxyRoot(parsed.origin)}${directory}`;
+  return `${getProxyRoot(parsed.origin)}${encodeProxyPath(directory)}`;
+}
+
+function encodeProxyPath(path: string) {
+  return path.endsWith("/") ? `${path}~` : path;
+}
+
+function decodeProxyPath(path: string) {
+  const queryIndex = path.indexOf("?");
+  const pathname = queryIndex >= 0 ? path.slice(0, queryIndex) : path;
+  const search = queryIndex >= 0 ? path.slice(queryIndex) : "";
+  const decodedPathname = pathname.endsWith("/~") ? pathname.slice(0, -1) : pathname;
+  return `${decodedPathname || "/"}${search}`;
 }
 
 function decodeTargetOrigin(value: string | undefined) {
@@ -299,14 +340,16 @@ function isPublicAddress(address: string) {
 function getTargetPath(request: IncomingMessage) {
   const proxiedRequest = request as ProxiedRequest;
   const originalUrl = proxiedRequest.originalUrl || proxiedRequest.url || "/";
-  const pathname = new URL(originalUrl, "http://local").pathname;
+  const parsedUrl = new URL(originalUrl, "http://local");
+  const pathname = parsedUrl.pathname;
   const originParam = getOriginParam(request);
 
   if (!originParam) {
     return pathname;
   }
 
-  return pathname.replace(new RegExp(`^/proxy/u/${escapeRegExp(originParam)}`), "") || "/";
+  const targetPath = pathname.replace(new RegExp(`^/proxy/u/${escapeRegExp(originParam)}`), "") || "/";
+  return decodeProxyPath(`${targetPath}${parsedUrl.search}`);
 }
 
 function escapeRegExp(value: string) {

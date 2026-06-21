@@ -3,6 +3,7 @@ export type Canvas = {
   name: string;
   site_url: string;
   site_origin: string;
+  share_token: string;
   owner_id: string;
   created_at: string;
 };

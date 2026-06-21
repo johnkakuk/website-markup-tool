@@ -256,6 +256,27 @@ textarea:focus {
   text-decoration: none;
 }
 
+.canvas-actions {
+  align-items: stretch;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.delete-canvas-button {
+  align-items: center;
+  background: #fff1f1;
+  border: 1px solid #efb8b8;
+  border-radius: 6px;
+  color: #9f1d1d;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 7px;
+  justify-content: center;
+  padding: 8px 10px;
+}
+
 .canvas-row span {
   display: grid;
   gap: 5px;
@@ -265,6 +286,18 @@ textarea:focus {
 .canvas-row small {
   color: #627067;
   overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .canvas-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .canvas-actions {
+    flex-wrap: wrap;
+  }
 }
 
 .empty-state {

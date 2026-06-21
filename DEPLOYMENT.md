@@ -85,6 +85,10 @@ In Supabase Authentication URL settings:
 The frontend also passes its current origin as the signup email redirect. Supabase must list that origin
 as an allowed redirect URL or it will fall back to the configured Site URL.
 
+In Supabase Authentication provider settings, enable anonymous sign-ins. Public canvas links use an
+automatic anonymous session plus a per-canvas secret token, so clients can comment without creating an
+account while database and storage policies continue to enforce access.
+
 ## 6. Create the Production Admin
 
 Local users are not copied to hosted Supabase. Sign up once through the deployed app, then run this
