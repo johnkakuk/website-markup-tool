@@ -26,7 +26,7 @@ import {
   useRef,
   useState
 } from "react";
-import { buildProxyUrl, pagePathFromProxyUrl } from "./lib/proxyUrl";
+import { buildProxyUrl, pagePathFromProxyLocation, targetUrlFromProxyLocation } from "./lib/proxyUrl";
 import { captureAndUploadScreenshot } from "./lib/screenshot";
 import { getElementTarget, resolveElement } from "./lib/selectors";
 import { hasCanvasShareLink, hasSupabaseConfig, supabase } from "./lib/supabase";
@@ -38,6 +38,7 @@ type DraftComment = {
   xPct: number;
   yPct: number;
   pagePath: string;
+  pageUrl: string;
   target: ElementTarget;
   elementXRatio: number | null;
   elementYRatio: number | null;
@@ -707,6 +708,28 @@ function buildCanvasShareUrl(canvas: Canvas) {
   return url.toString();
 }
 
+function isSameUrl(left: string, right: string) {
+  try {
+    const leftUrl = new URL(left);
+    const rightUrl = new URL(right);
+    return (
+      leftUrl.origin === rightUrl.origin &&
+      leftUrl.pathname === rightUrl.pathname &&
+      leftUrl.search === rightUrl.search
+    );
+  } catch {
+    return left === right;
+  }
+}
+
+function isCommentOnPage(comment: Comment, pagePath: string, pageUrl: string) {
+  if (comment.page_url) {
+    return isSameUrl(comment.page_url, pageUrl);
+  }
+
+  return comment.page_path === pagePath;
+}
+
 function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
@@ -716,16 +739,19 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [pinPositions, setPinPositions] = useState<Record<string, PinPosition>>({});
   const [pagePath, setPagePath] = useState("/");
+  const [pageUrl, setPageUrl] = useState(canvas.site_url);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [savingComment, setSavingComment] = useState(false);
   const [interactionMode, setInteractionMode] = useState<"browse" | "comment">("browse");
   const [elementHighlight, setElementHighlight] = useState<ElementHighlight | null>(null);
   const [commentsDrawerOpen, setCommentsDrawerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingScrollCommentIdRef = useRef<string | null>(null);
 
-  const iframeSrc = useMemo(() => buildProxyUrl(canvas.site_url), [canvas.site_url]);
+  const initialIframeSrc = useMemo(() => buildProxyUrl(canvas.site_url), [canvas.site_url]);
+  const [iframeSrc, setIframeSrc] = useState(initialIframeSrc);
   const visibleComments = comments.filter(
-    (comment) => comment.page_path === pagePath && comment.status === "open"
+    (comment) => comment.status === "open" && isCommentOnPage(comment, pagePath, pageUrl)
   );
   const openCommentCount = comments.filter((comment) => comment.status === "open").length;
   const activeComment = comments.find((comment) => comment.id === activeCommentId) ?? null;
@@ -840,6 +866,13 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
   }, [canvas.id]);
 
   useEffect(() => {
+    pendingScrollCommentIdRef.current = null;
+    setIframeSrc(initialIframeSrc);
+    setPagePath("/");
+    setPageUrl(canvas.site_url);
+  }, [canvas.site_url, initialIframeSrc]);
+
+  useEffect(() => {
     if (!iframeLoaded || !iframeRef.current?.contentDocument) {
       return;
     }
@@ -889,7 +922,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       windowRef?.removeEventListener("scroll", updatePinPositions);
       windowRef?.removeEventListener("resize", updatePinPositions);
     };
-  }, [comments, iframeLoaded, pagePath]);
+  }, [comments, iframeLoaded, pagePath, pageUrl]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -958,6 +991,50 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
     iframeLoaded
   ]);
 
+  function scrollToCommentLocation(comment: Comment) {
+    const iframe = iframeRef.current;
+    const documentRef = iframe?.contentDocument;
+    const windowRef = iframe?.contentWindow;
+    if (!iframe || !documentRef || !windowRef) {
+      return;
+    }
+
+    const element = resolveElement(documentRef, {
+      elementSelector: comment.element_selector,
+      elementId: comment.element_id,
+      dataSelector: comment.data_selector,
+      xpath: comment.xpath
+    });
+
+    if (element) {
+      element.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      return;
+    }
+
+    windowRef.scrollTo({
+      top: (comment.y_pct / 100) * windowRef.innerHeight,
+      behavior: "smooth"
+    });
+  }
+
+  function openComment(comment: Comment) {
+    const targetUrl =
+      comment.page_url ?? new URL(comment.page_path || "/", canvas.site_origin).toString();
+    setActiveCommentId(comment.id);
+    setCommentsDrawerOpen(true);
+    setDraft(null);
+    setElementHighlight(null);
+
+    if (!isSameUrl(targetUrl, pageUrl)) {
+      pendingScrollCommentIdRef.current = comment.id;
+      setIframeLoaded(false);
+      setIframeSrc(buildProxyUrl(targetUrl));
+      return;
+    }
+
+    scrollToCommentLocation(comment);
+  }
+
   function handleFrameLoad() {
     const frameLocation = iframeRef.current?.contentWindow?.location;
     const frameDocument = iframeRef.current?.contentDocument;
@@ -972,8 +1049,22 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       setError("The proxied website returned a 404. Open the browser console for request details.");
     }
 
-    setPagePath(frameLocation ? pagePathFromProxyUrl(frameLocation.pathname) : "/");
+    const nextPagePath = frameLocation ? pagePathFromProxyLocation(frameLocation) : "/";
+    const nextPageUrl = frameLocation
+      ? targetUrlFromProxyLocation(canvas.site_origin, frameLocation)
+      : canvas.site_url;
+    setPagePath(nextPagePath);
+    setPageUrl(nextPageUrl);
     setIframeLoaded(true);
+
+    const pendingScrollCommentId = pendingScrollCommentIdRef.current;
+    if (pendingScrollCommentId) {
+      const pendingComment = comments.find((comment) => comment.id === pendingScrollCommentId);
+      if (pendingComment && isCommentOnPage(pendingComment, nextPagePath, nextPageUrl)) {
+        pendingScrollCommentIdRef.current = null;
+        window.setTimeout(() => scrollToCommentLocation(pendingComment), 50);
+      }
+    }
   }
 
   function handleOverlayClick(event: MouseEvent<HTMLDivElement>) {
@@ -1023,6 +1114,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
       xPct: (x / rect.width) * 100,
       yPct: (y / rect.height) * 100,
       pagePath,
+      pageUrl,
       target: getElementTarget(clickedElement),
       elementXRatio,
       elementYRatio,
@@ -1127,6 +1219,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
         y_pct: draft.yPct,
         viewport_width: iframeRef.current.clientWidth,
         page_path: draft.pagePath,
+        page_url: draft.pageUrl,
         body,
         screenshot_path: screenshotPath,
         screenshot_url: null,
@@ -1316,9 +1409,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
                 style={{ left: `${position.xPct}%`, top: `${position.yPct}%` }}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setActiveCommentId(comment.id);
-                  setCommentsDrawerOpen(true);
-                  setDraft(null);
+                  openComment(comment);
                 }}
                 aria-label="Open comment"
               >
@@ -1419,7 +1510,7 @@ function CanvasWorkspace({ canvas, session }: { canvas: Canvas; session: Session
           <CommentListDrawer
             comments={comments}
             onClose={() => setCommentsDrawerOpen(false)}
-            onSelect={setActiveCommentId}
+            onSelect={openComment}
           />
         )
       ) : null}
@@ -1434,7 +1525,7 @@ function CommentListDrawer({
 }: {
   comments: Comment[];
   onClose: () => void;
-  onSelect: (commentId: string) => void;
+  onSelect: (comment: Comment) => void;
 }) {
   const openComments = comments.filter((comment) => comment.status === "open");
   const resolvedComments = comments.filter((comment) => comment.status === "resolved");
@@ -1476,7 +1567,7 @@ function CommentListSection({
   title: string;
   comments: Comment[];
   emptyMessage: string;
-  onSelect: (commentId: string) => void;
+  onSelect: (comment: Comment) => void;
 }) {
   return (
     <section className="comment-list-section">
@@ -1489,11 +1580,11 @@ function CommentListSection({
           <button
             className={`comment-list-item ${comment.status}`}
             key={comment.id}
-            onClick={() => onSelect(comment.id)}
+            onClick={() => onSelect(comment)}
             type="button"
           >
             <strong>{comment.body}</strong>
-            <span>{comment.page_path}</span>
+            <span>{comment.page_url ?? comment.page_path}</span>
           </button>
         ))}
         {comments.length === 0 ? <p className="comment-list-empty">{emptyMessage}</p> : null}

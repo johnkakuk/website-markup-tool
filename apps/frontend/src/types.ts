@@ -22,6 +22,7 @@ export type Comment = {
   y_pct: number;
   viewport_width: number;
   page_path: string;
+  page_url: string | null;
   body: string;
   screenshot_path: string | null;
   screenshot_url: string | null;

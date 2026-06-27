@@ -10,6 +10,14 @@ export function pagePathFromProxyUrl(proxyPath: string) {
   return decodeProxyPath(match?.[1] || "/");
 }
 
+export function pagePathFromProxyLocation(location: Location) {
+  return `${pagePathFromProxyUrl(location.pathname)}${location.search}`;
+}
+
+export function targetUrlFromProxyLocation(siteOrigin: string, location: Location) {
+  return new URL(pagePathFromProxyLocation(location), siteOrigin).toString();
+}
+
 function encodeProxyPath(path: string) {
   return path.endsWith("/") ? `${path}~` : path;
 }
